@@ -630,7 +630,7 @@ PARAMS_UI = {
 # ─────────────────────────────────────────────────────────────────────────────
 # ══════════════════  LAYER 1 — DEMAND FORECAST  ══════════════════════════════
 # ─────────────────────────────────────────────────────────────────────────────
-st.markdown("## 📈 Layer 1 — Demand Forecast")
+st.markdown("## 📈 24h-ahead EV Charging Demand Forecast")
 
 left, right = st.columns(2)
 with left:
