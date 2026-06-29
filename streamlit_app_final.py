@@ -21,7 +21,7 @@ except ModuleNotFoundError:
 
 
 APP_DIR = Path(__file__).resolve().parent
-MODEL_PATH = APP_DIR / "hybrid_lstm_xgb_model.pkl"
+MODEL_PATH = APP_DIR / "hybrid_lstm_xgb_model_validation.pkl"
 TIMESTAMP_COL = "timestamp"
 FORECAST_COL = "Forecasted Average Power (kW)"
 

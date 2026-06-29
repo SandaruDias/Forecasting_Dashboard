@@ -20,4 +20,4 @@ Upload:
 Both files must contain the engineered feature columns expected by the saved
 model. The generated CSV contains `timestamp` and
 `Forecasted Average Power (kW)`.
-python -m streamlit run streamlit_app.py
+python -m streamlit run streamlit_app_final.py
