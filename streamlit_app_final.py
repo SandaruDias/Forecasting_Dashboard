@@ -475,7 +475,7 @@ def plot_cost_comparison(baseline, result):
     base_vals  = [baseline['J_energy'], baseline['J_demand'], baseline['total_cost']]
     bess_vals  = [result['J_energy'],   result['J_demand'],
                   result['J_energy'] + result['J_demand']]
-    savings = baseline['total_cost'] - (result['J_energy'] + result['J_demand'])
+    savings = baseline['total_cost'] - (result['J_energy'] + result['J_demand']+result['J_deg'] + result['J_bess'])
 
     fig = make_subplots(rows=1, cols=2,specs=[[{"type": "xy"}, {"type": "domain"}]], subplot_titles=['Baseline vs With BESS', 'Total Cost Breakdown (With BESS)'])
 
