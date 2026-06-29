@@ -30,23 +30,23 @@ FORECAST_COL = "Forecasted Average Power (kW)"
 # ─────────────────────────────────────────────────────────────────────────────
 DELTA_T   = 0.25
 N_STEPS   = 96
-E_BESS    = 8900.0
+E_BESS    = 220
 P_CH_MAX  = E_BESS * 0.25
 P_DIS_MAX = E_BESS * 0.25
 ETA_CH    = 0.95
 ETA_DIS   = 0.95
 SOC_MIN   = 0.20 * E_BESS
 SOC_MAX   = 0.90 * E_BESS
-SOC_INIT  = 0.60 * E_BESS
-SOC_FINAL = 0.60 * E_BESS
+SOC_INIT  = 0.20 * E_BESS
+SOC_FINAL = 0.20 * E_BESS
 C_DEG           = 0.05
 LAM_DEMAND      = 4.81
 LAM_DEMAND_DAILY= LAM_DEMAND / 30.0
-C_BESS          = 250.0
+C_BESS          = 200.0
 C_BESS_TOTAL    = C_BESS * E_BESS
 DISCOUNT_RATE   = 0.10
 N_YEARS         = 10
-P_GRID_MAX      = 9600.0
+P_GRID_MAX      = 240.0
 CRF             = DISCOUNT_RATE * (1 + DISCOUNT_RATE)**N_YEARS / ((1 + DISCOUNT_RATE)**N_YEARS - 1)
 BESS_ANNUAL_COST= C_BESS_TOTAL * CRF
 BESS_DAILY_COST = BESS_ANNUAL_COST / 365.0
@@ -71,7 +71,7 @@ PARAMS = {
 # Page config
 # ─────────────────────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="EV Hub — Forecast & Peak Shaving",
+    page_title="Day-Ahead EV Charging Hub Forecast & Two Layer Peak Shaving Optimization",
     page_icon="⚡",
     layout="wide",
 )
@@ -105,8 +105,8 @@ st.markdown("""
 # ─────────────────────────────────────────────────────────────────────────────
 def build_tou_masks(n: int, delta_t: float = DELTA_T):
     h = np.arange(n) * delta_t
-    mask_peak    = ((h >= 10) & (h < 12)) | ((h >= 14) & (h < 19))
-    mask_offpeak = (h >= 0) & (h < 8)
+    mask_peak    = ((h >= 18) & (h < 22)) 
+    mask_offpeak = (h >= 0) & (h < 8) | ((h >= 22) & (h < 24))
     mask_day     = ~mask_peak & ~mask_offpeak
     tariff = np.where(mask_peak, 0.220, 0.048)
     return h, mask_peak, mask_offpeak, mask_day, tariff
@@ -203,7 +203,7 @@ def build_output(next_day_df, predictions):
 # ─────────────────────────────────────────────────────────────────────────────
 def calculate_baseline(P_demand, tariff_arr, lam_demand_daily, delta_t, mask_pk):
     J_energy        = float(np.sum(tariff_arr * P_demand) * delta_t)
-    peak_demand_max = float(P_demand[mask_pk].max())
+    peak_demand_max = float(P_demand.max())
     J_demand        = lam_demand_daily * peak_demand_max
     return {
         'J_energy'        : J_energy,
@@ -244,9 +244,9 @@ def solve_peak_shaving(P_demand, tariff_arr, mask_pk, mask_op, mask_day_,
     constraints = []
     constraints += [P_grid == P_demand - P_dis / eta_dis + P_ch * eta_ch]
     constraints += [P_grid >= 0, P_grid <= P_GRID_MAX]
-    constraints += [P_grid[mask_pk] <= T]
-    constraints += [P_dis[~mask_pk] == 0]
-    constraints += [P_ch[mask_pk]   == 0]
+    constraints += [P_grid <= T]
+    constraints += [P_dis[mask_op] == 0]
+    constraints += [P_ch[~mask_op]   == 0]
     constraints += [SoC[0] == soc_init]
     for t in range(N):
         constraints += [SoC[t + 1] == SoC[t] + (P_ch[t] * eta_ch - P_dis[t] / eta_dis) * dt]
@@ -255,7 +255,8 @@ def solve_peak_shaving(P_demand, tariff_arr, mask_pk, mask_op, mask_day_,
     constraints += [P_dis <= P_dis_max]
     constraints += [P_ch + P_dis <= max(P_ch_max, P_dis_max)]
     constraints += [SoC[N] == soc_final]
-    constraints += [T >= 500, T <= float(P_demand.max())]
+    constraints += [SoC[32]==SOC_MAX]
+    constraints += [T >= 50, T <= float(P_demand.max())]
     for t in range(1, N):
         constraints += [(P_dis[t] - P_dis[t-1]) <=  0.1 * P_dis_max]
         constraints += [(P_dis[t-1] - P_dis[t]) <=  0.1 * P_dis_max]
@@ -476,7 +477,7 @@ def plot_cost_comparison(baseline, result):
                   result['J_energy'] + result['J_demand']]
     savings = baseline['total_cost'] - (result['J_energy'] + result['J_demand'])
 
-    fig = make_subplots(rows=1, cols=2, subplot_titles=['Baseline vs With BESS', 'Total Cost Breakdown (With BESS)'])
+    fig = make_subplots(rows=1, cols=2,specs=[[{"type": "xy"}, {"type": "domain"}]], subplot_titles=['Baseline vs With BESS', 'Total Cost Breakdown (With BESS)'])
 
     fig.add_trace(go.Bar(name='Without BESS', x=categories, y=base_vals,
         marker_color='rgba(231,76,60,0.8)',
@@ -560,10 +561,10 @@ def plot_peak_shaving_bars(hours_axis, P_dem, P_grid, T_opt, mask_peak, mask_off
 # ─────────────────────────────────────────────────────────────────────────────
 # Page header
 # ─────────────────────────────────────────────────────────────────────────────
-st.title("⚡ EV Charging Hub — Forecast & Peak Shaving Optimisation")
+st.title("⚡ Day-Ahead EV Charging Hub Forecast & Two Layer Peak Shaving Optimization")
 st.caption(
-    "Layer 1: LSTM + XGBoost hybrid model forecasts average power demand. "
-    "Layer 2: Convex optimisation (CVXPY / HiGHS) determines the optimal BESS peak-shaving threshold."
+    "Forecast: LSTM + XGBoost hybrid model forecasts average power demand for next 24-hours. "
+    "Layer 2: Convex optimization determines the optimal static peak-shaving threshold."
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -607,7 +608,7 @@ P_CH_MAX_UI  = E_bess_ui * 0.25
 P_DIS_MAX_UI = E_bess_ui * 0.25
 SOC_MIN_UI   = 0.20 * E_bess_ui
 SOC_MAX_UI   = 0.90 * E_bess_ui
-SOC_INIT_UI  = 0.60 * E_bess_ui
+SOC_INIT_UI  = 0.20 * E_bess_ui
 LAM_DEMAND_DAILY_UI = lam_demand_ui / 30.0
 CRF_UI       = DISCOUNT_RATE * (1 + DISCOUNT_RATE)**N_YEARS / ((1 + DISCOUNT_RATE)**N_YEARS - 1)
 BESS_DAILY_UI= c_bess_ui * E_bess_ui * CRF_UI / 365.0
@@ -732,9 +733,9 @@ if "forecast_result" in st.session_state:
     result_df = st.session_state["forecast_result"]
 
     st.divider()
-    st.markdown("## 🔋 Layer 2 — Peak Shaving Threshold Optimisation")
+    st.markdown("## 🔋 Peak Shaving Threshold Optimization")
     st.caption(
-        "Uses the forecasted demand above as input. Convex optimisation (CVXPY / HiGHS LP solver) "
+        "Uses the forecasted demand above as input. Convex optimization (CVXPY / HiGHS LP solver) "
         "determines the optimal flat threshold that minimises energy cost + demand charge + "
         "battery degradation + BESS capital cost."
     )
@@ -746,7 +747,7 @@ if "forecast_result" in st.session_state:
             st.markdown("**Time-of-Use Tariff (PUCSL — Apr. 2026)**")
             st.dataframe(pd.DataFrame({
                 'Period'         : ['Off-peak', 'Day (shoulder)', 'TOU Peak'],
-                'Hours'          : ['00:00–08:00', '08:00–10:00, 12:00–14:00, 19:00–24:00', '10:00–12:00, 14:00–19:00'],
+                'Hours'          : ['00:00–08:00, 22:00–24:00', '08:00–18:00', '18:00–22:00'],
                 'Rate (LKR/kWh)' : [15, 15, 70],
                 'Rate (USD/kWh)' : [0.048, 0.048, 0.220],
             }), hide_index=True, use_container_width=True)
@@ -757,8 +758,8 @@ if "forecast_result" in st.session_state:
                               'Charging window', 'Discharging window'],
                 'Value'    : [f'{E_bess_ui:,.0f} kWh', '70%', '20%–90%',
                               f'C/4 = {P_CH_MAX_UI:,.0f} kW',
-                              'Off-peak + Day (not during TOU peak)',
-                              'TOU Peak only (10–12h, 14–19h)'],
+                              'Off-peak ',
+                              'Day and Peak only '],
             }), hide_index=True, use_container_width=True)
 
     if st.button("⚡ Run Peak Shaving Optimisation", type="primary", use_container_width=True):
@@ -776,7 +777,7 @@ if "forecast_result" in st.session_state:
         baseline_res = calculate_baseline(P_forecast, tariff_arr, LAM_DEMAND_DAILY_UI,
                                           DELTA_T, mask_pk)
 
-        with st.spinner("Solving convex optimisation (HiGHS LP)... this may take 15–30 seconds."):
+        with st.spinner("Solving static optimization (HiGHS LP)... this may take 15–30 seconds."):
             try:
                 opt = solve_peak_shaving(P_forecast, tariff_arr, mask_pk, mask_op, mask_dy,
                                          SOC_INIT_UI, PARAMS_UI)
@@ -810,7 +811,7 @@ if "forecast_result" in st.session_state:
         energy_shaved_kWh  = float(np.sum(np.maximum(P_forecast[mask_pk] - T_opt, 0)) * DELTA_T)
         bess_discharge_kWh = float(np.sum(P_dis_opt) * DELTA_T)
         bess_charge_kWh    = float(np.sum(P_ch_opt)  * DELTA_T)
-        daily_savings      = baseline['total_cost'] - (opt['J_energy'] + opt['J_demand'])
+        daily_savings      = baseline['total_cost'] - (opt['J_energy'] + opt['J_demand']+ opt['J_deg'] + opt['J_bess'])
         annual_savings     = daily_savings * 365
 
         # ── KPI row ───────────────────────────────────────────────────────
