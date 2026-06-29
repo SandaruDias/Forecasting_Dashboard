@@ -561,10 +561,9 @@ def plot_peak_shaving_bars(hours_axis, P_dem, P_grid, T_opt, mask_peak, mask_off
 # ─────────────────────────────────────────────────────────────────────────────
 # Page header
 # ─────────────────────────────────────────────────────────────────────────────
-st.title("⚡ Day-Ahead EV Charging Hub Forecast & Two Layer Peak Shaving Optimization")
+st.title("⚡ Two Layer Peak Shaving Optimizer")
 st.caption(
     "Forecast: LSTM + XGBoost hybrid model forecasts average power demand for next 24-hours. "
-    "Layer 2: Convex optimization determines the optimal static peak-shaving threshold."
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -601,7 +600,7 @@ with st.sidebar:
     sens_sizes_str = st.text_input("BESS sizes to test (kWh, comma-sep)",
                                     value="2000,4000,6000,8000,10000,12000")
 
-    st.info("Upload CSVs in the main panel, generate forecast, then run optimisation.")
+    st.info("Upload CSVs in the main panel, generate forecast, then run optimization.")
 
 # Rebuild params from sidebar
 P_CH_MAX_UI  = E_bess_ui * 0.25
@@ -762,35 +761,67 @@ if "forecast_result" in st.session_state:
                               'Day and Peak only '],
             }), hide_index=True, use_container_width=True)
 
+    # --- NEW: Add File Uploader ---
+    actual_demand_upload = st.file_uploader(
+        "Optional: Upload Actual Demand CSV (for accurate baseline cost)",
+        type=["csv"],
+        help="Must contain a column named 'Actual Average Power (kW)'"
+    )
+    # ------------------------------
+
     if st.button("⚡ Run Peak Shaving Optimisation", type="primary", use_container_width=True):
-        P_forecast = result_df[FORECAST_COL].values.astype(float)
+            P_forecast = result_df[FORECAST_COL].values.astype(float)
 
-        if len(P_forecast) != N_STEPS:
-            st.warning(
-                f"Optimisation expects exactly {N_STEPS} time steps (15-min resolution, 24h). "
-                f"Forecast has {len(P_forecast)} steps. Interpolating to {N_STEPS} steps.")
-            P_forecast = np.interp(
-                np.linspace(0, 1, N_STEPS),
-                np.linspace(0, 1, len(P_forecast)), P_forecast)
+            if len(P_forecast) != N_STEPS:
+                st.warning(
+                    f"Optimisation expects exactly {N_STEPS} time steps (15-min resolution, 24h). "
+                    f"Forecast has {len(P_forecast)} steps. Interpolating to {N_STEPS} steps.")
+                P_forecast = np.interp(
+                    np.linspace(0, 1, N_STEPS),
+                    np.linspace(0, 1, len(P_forecast)), P_forecast)
 
-        hours_ax, mask_pk, mask_op, mask_dy, tariff_arr = build_tou_masks(len(P_forecast))
-        baseline_res = calculate_baseline(P_forecast, tariff_arr, LAM_DEMAND_DAILY_UI,
-                                          DELTA_T, mask_pk)
+            # --- NEW: Process Actual Demand for Baseline ---
+            P_baseline = P_forecast.copy()  # Default to forecast if no file is uploaded
+            if actual_demand_upload is not None:
+                try:
+                    actual_df = pd.read_csv(actual_demand_upload)
+                    if 'Actual Average Power (kW)' in actual_df.columns:
+                        P_baseline = actual_df['Actual Average Power (kW)'].values.astype(float)
+                        
+                        # Interpolate actual data to match N_STEPS if necessary
+                        if len(P_baseline) != N_STEPS:
+                            P_baseline = np.interp(
+                                np.linspace(0, 1, N_STEPS),
+                                np.linspace(0, 1, len(P_baseline)), P_baseline)
+                        st.success("✅ Using uploaded actual demand for baseline calculation.")
+                    else:
+                        st.warning("⚠️ Column 'Actual Average Power (kW)' not found. Defaulting to forecasted demand for baseline.")
+                except Exception as e:
+                    st.error(f"Could not read actual demand file: {e}")
+            # -----------------------------------------------
 
-        with st.spinner("Solving static optimization (HiGHS LP)... this may take 15–30 seconds."):
-            try:
-                opt = solve_peak_shaving(P_forecast, tariff_arr, mask_pk, mask_op, mask_dy,
-                                         SOC_INIT_UI, PARAMS_UI)
-                st.session_state["opt_result"]   = opt
-                st.session_state["opt_baseline"] = baseline_res
-                st.session_state["opt_hours"]    = hours_ax
-                st.session_state["opt_masks"]    = (mask_pk, mask_op, mask_dy)
-                st.session_state["opt_demand"]   = P_forecast
-                # Store tariff_arr too so sensitivity can use it after rerender
-                st.session_state["opt_tariff"]   = tariff_arr
-                st.success(f"✅ Optimisation complete — Solver status: **{opt['status']}**")
-            except Exception as exc:
-                st.error(f"Optimisation failed: {exc}")
+            hours_ax, mask_pk, mask_op, mask_dy, tariff_arr = build_tou_masks(len(P_forecast))
+            
+            # MODIFIED: Pass P_baseline instead of P_forecast
+            baseline_res = calculate_baseline(P_baseline, tariff_arr, LAM_DEMAND_DAILY_UI,
+                                            DELTA_T, mask_pk)
+
+            with st.spinner("Solving static optimization (HiGHS LP)... this may take 15–30 seconds."):
+                try:
+                    # The optimizer still uses P_forecast
+                    opt = solve_peak_shaving(P_forecast, tariff_arr, mask_pk, mask_op, mask_dy,
+                                            SOC_INIT_UI, PARAMS_UI)
+                    st.session_state["opt_result"]   = opt
+                    st.session_state["opt_baseline"] = baseline_res
+                    st.session_state["opt_hours"]    = hours_ax
+                    st.session_state["opt_masks"]    = (mask_pk, mask_op, mask_dy)
+                    st.session_state["opt_demand"]   = P_forecast
+                    st.session_state["opt_baseline_demand"] = P_baseline # Added just in case you want to plot it later
+                    # Store tariff_arr too so sensitivity can use it after rerender
+                    st.session_state["opt_tariff"]   = tariff_arr
+                    st.success(f"✅ Optimisation complete — Solver status: **{opt['status']}**")
+                except Exception as exc:
+                    st.error(f"Optimisation failed: {exc}")
 
     # ── Optimisation results — shown whenever they exist in session state ──
     if "opt_result" in st.session_state:
